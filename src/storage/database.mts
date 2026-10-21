@@ -1,6 +1,7 @@
 import { DatabaseSync } from 'node:sqlite';
 import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
+import { createHash } from 'node:crypto';
 
 export function openDatabase(path = ':memory:'): DatabaseSync {
   if (path !== ':memory:') mkdirSync(dirname(path), { recursive: true });
@@ -9,9 +10,10 @@ export function openDatabase(path = ':memory:'): DatabaseSync {
   db.exec('CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY, applied_at INTEGER NOT NULL) STRICT;');
   const versions = db.prepare('SELECT version FROM schema_migrations ORDER BY version DESC LIMIT 1').get() as
     { version: number } | undefined;
-  if ((versions?.version ?? 0) > 1) {
+  let currentVersion = versions?.version ?? 0;
+  if (currentVersion > 3) {
     db.close();
-    throw new Error(`Database schema ${versions?.version} is newer than this application`);
+    throw new Error(`Database schema ${currentVersion} is newer than this application`);
   }
   if (!versions) {
     db.exec('BEGIN IMMEDIATE');
@@ -99,6 +101,39 @@ export function openDatabase(path = ':memory:'): DatabaseSync {
         ) STRICT;
       `);
       db.prepare('INSERT INTO schema_migrations(version, applied_at) VALUES (?, ?)').run(1, Date.now());
+      db.exec('COMMIT');
+      currentVersion = 1;
+    } catch (error) {
+      db.exec('ROLLBACK');
+      db.close();
+      throw error;
+    }
+  }
+  if (currentVersion < 2) {
+    db.exec('BEGIN IMMEDIATE');
+    try {
+      db.exec(`ALTER TABLE live_events ADD COLUMN content_purged INTEGER NOT NULL DEFAULT 0
+        CHECK (content_purged IN (0,1));`);
+      db.prepare('INSERT INTO schema_migrations(version, applied_at) VALUES (?, ?)').run(2, Date.now());
+      db.exec('COMMIT');
+    } catch (error) {
+      db.exec('ROLLBACK');
+      db.close();
+      throw error;
+    }
+    currentVersion = 2;
+  }
+  if (currentVersion < 3) {
+    db.exec('BEGIN IMMEDIATE');
+    try {
+      db.exec('ALTER TABLE live_events ADD COLUMN source_key_hash TEXT;');
+      const rows = db.prepare('SELECT event_id AS eventId,source,source_event_id AS sourceEventId FROM live_events')
+        .all() as { eventId: string; source: string; sourceEventId: string }[];
+      const update = db.prepare('UPDATE live_events SET source_key_hash=? WHERE event_id=?');
+      for (const row of rows) {
+        update.run(createHash('sha256').update(`${row.source}\0${row.sourceEventId}`).digest('hex'), row.eventId);
+      }
+      db.prepare('INSERT INTO schema_migrations(version, applied_at) VALUES (?, ?)').run(3, Date.now());
       db.exec('COMMIT');
     } catch (error) {
       db.exec('ROLLBACK');

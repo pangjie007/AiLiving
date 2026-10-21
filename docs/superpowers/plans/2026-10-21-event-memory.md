@@ -157,10 +157,13 @@ test('旧来源事件回放被擦除哈希拦截，新事件使用新代次', ()
 
 - [x] 在 `memory-repository.mts` 定义公开类型 `Scope`, `MemoryInput`, `ProfileFactInput` 和 `ViewerEpochError`。`Scope` 含 `workspaceId, hostId, viewerId`。
 - [x] `MemoryRepository.ingestEvent(input, now)` 先调用事件校验；按 `(source, sourceEventId)` 查唯一约束，重复返回 `inserted:false`。新观众建代次 0；墓碑观众新鲜新事件清除 `forgotten_at` 并返回递增后的当前代次。`erased_event_keys` 命中时不插入且不激活观众。
-- [x] `setProfileFact(input, expectedEpoch)` 在事务内要求观众存在、未删除、代次相同，证据事件属于同一工作空间、角色和观众；明确事实置信度强制为 1，推测值置信度须在 0.6–1；将该属性未过期的旧值标记 `superseded_at` 后插入新事实及来源事件。
-- [x] `savePrivateMemory(input, expectedEpoch)` 验证观众代次、证据事件归属与非空内容；`savePublicMemory(input)` 要求证据事件 `viewer_id IS NULL AND visibility='public'`。两种记忆至少各有一个证据事件。
+- [x] `setProfileFact(input, expectedEpoch, now)` 在事务内要求观众存在、未删除、代次相同，证据事件属于同一工作空间、角色和观众；明确事实置信度强制为 1，推测值置信度须在 0.6–1；创建时间不能晚于当前操作时间 5 分钟以上；只有 `createdAt` 严格晚于当前事实时才替换旧值，迟到或同时间版本返回 `ignored:true`。
+- [x] `savePrivateMemory(input, expectedEpoch, now)` 验证观众代次、证据事件归属、非空内容和创建时间；`savePublicMemory(input, now)` 要求证据事件 `viewer_id IS NULL AND visibility='public'`。两种记忆至少各有一个证据事件。
 - [x] `listProfileFacts(scope, now)` 仅返回匹配作用域、未过期、未被替代事实；`listProfileFactHistory` 返回同作用域事实及证据；`listMemories(scope, now)` 返回该观众私人记忆和公开记忆，排除过期记忆。
 - [x] `forgetViewer(scope, now)` 用 `BEGIN IMMEDIATE` 保证原子性：确保代次行存在、算出该观众来源事件集合、写入 90 天去重哈希、删除私人记忆及引用这些事件的公开记忆、删除该观众全部画像和原始事件、代次加一并写 `forgotten_at`。失败回滚所有步骤。不要在删除日志记录昵称、消息正文或来源事件原文。
+- [x] `purgeExpired(now)` 用单个事务擦除 30 天前事件正文与原来源 ID，保留无正文事件证据行和来源 ID SHA-256 摘要，并写 90 天回放拦截键；摘要保留到事件删除，确保迟来的遗忘操作能重新延长拦截期。低熵或可猜测的来源 ID 可能被候选值比对推断。删除过期记忆、事实和去重键。清理任务由未来服务端定时调度。
+- [x] schema v2 增加事件正文清除标志，v3 增加来源 ID SHA-256 摘要；为已有 v1 数据库提供原地迁移并回填摘要，保留原有事件。
+- [x] 普通事实和未固定记忆在未指定期限时默认 90 天，显式期限最多 90 天；固定记忆不自动过期。
 - [x] 所有 SQL 使用预备语句绑定参数；作用域字段始终来自每个方法参数并出现在 WHERE 条件，不接受调用方提供任意 SQL 片段。
 - [x] 运行 `node --test tests/storage.test.mts`，确认幂等、范围隔离、证据历史、删除回放和旧代次拦截用例通过。
 
@@ -172,7 +175,7 @@ test('旧来源事件回放被擦除哈希拦截，新事件使用新代次', ()
 - [x] 写事务回滚测试：尝试写入找不到来源事件的记忆，断言操作报错，记忆表行数保持 0，事件和观众代次不变。
 - [x] `memory-demo.mts` 使用内存库创建模拟观众、入一条明确兴趣事件、保存偏好事实与私人记忆、列出内容，然后执行删除并打印“删除前 1 条记忆/删除后 0 条、旧代次写入被拒”。不得接收或输出真实用户数据。
 - [x] README 加入“事件与记忆存储”章节，列出匿名模拟数据、SQLite 文件默认位置 `data/ailiving.sqlite`、本地 demo 命令、删除 90 天哈希/代次墓碑说明，以及当前尚未有管理界面和真实直播接入。
-- [x] 执行完整 `npm test` 和 `npm run demo:memory`，记录总用例数、失败数、SQLite Node 版本及演练输出。不得只以类型可擦除执行宣称静态类型检查通过。
+- [x] 执行完整 `npm test`、`npm run demo:memory`、`npm run demo` 和 `git diff --check`。不得只以类型可擦除执行宣称静态类型检查通过。
 
 ## 验收与实现边界
 
@@ -180,7 +183,7 @@ test('旧来源事件回放被擦除哈希拦截，新事件使用新代次', ()
 - [x] 每次查询和更新严格按工作空间、角色和观众筛选。
 - [x] 图片事实与记忆都有可追溯事件证据；新事实修订保留历史。
 - [x] 删除事务移除原始正文、画像、私有记忆及受影响的公开摘要；旧代次异步写入失败。
-- [x] 只保留去重哈希与代次墓碑，不保留消息正文；处理 90 天后哈希清理及旧事件新鲜度校验。
+- [x] 过 30 天后只保留无正文事件证据及 90 天去重哈希；清理任务处理原文、过期事实/记忆和 90 天后哈希清理，旧事件新鲜度校验继续拒绝回放。
 - [x] SQLite 外键开启，事务异常时不留下部分结果，持久化在关闭重开后生效。
 - [x] 本阶段不包含模型生成画像、自动写入生产记忆、前端、跨平台身份合并和正式直播消息发送。
 
@@ -193,9 +196,9 @@ test('旧来源事件回放被擦除哈希拦截，新事件使用新代次', ()
 
 ## 执行记录（2026-10-21）
 
-- 已实现事件验证、SQLite schema v1、幂等事件仓库、带证据的事实修订、私人/公开记忆查询与事务化删除。
-- `npm test`：22 项通过，0 项失败；包含遗忘时旧公共摘要清理、来源事件回放拦截、作用域隔离、数据库重开持久化和触发器注入回滚。
-- `npm run demo:memory`：显示删除前 1 条记忆、删除后 0 条，迟到写入拒绝。
+- 已实现事件验证、SQLite schema v1、幂等事件仓库、带证据的事实修订、私人/公开记忆查询、事务化删除和过期清理。
+- `npm test`：29 项通过，0 项失败；覆盖 v1 原地迁移、30 天原文擦除、90 天过期、哈希清理、延迟遗忘后回放拦截、未来时间拒绝、时间倒序画像写入保护、作用域隔离、重开持久化和事务回滚。
+- `npm run demo:memory`：显示删除前 1 条记忆、删除后 0 条，迟到写入拒绝；`npm run demo` 和 `git diff --check` 通过。
 - 测试运行时为 Node v26.4.0，数据库来自 Node 内置 `node:sqlite`；没有第三方包。没有静态 TypeScript 检查器。
 - 存储接收的 viewerId 必须是内部不透明 ID；真实平台身份映射仍由未来适配器实现。代次墓碑不含昵称或消息正文，仓库不保留平台来源事件原 ID。
-- 工作副本是 `/private/tmp/AiLiving-memory` 的 Git worktree；尚未提交或推送本里程碑。
+- 清理操作需由未来服务端定时调度；普通事实、未固定记忆默认 90 天，固定记忆不自动过期。

@@ -19,12 +19,12 @@ repository.setProfileFact({
   factId: 'demo-fact-1', ...scope, key: 'favorite_music', value: '爵士',
   kind: 'explicit', confidence: 1, createdAt: now, expiresAt: null,
   evidenceEventId: event.eventId
-}, ingest.viewerEpoch!);
+}, ingest.viewerEpoch!, now);
 repository.savePrivateMemory({
   memoryId: 'demo-memory-1', ...scope, visibility: 'private', kind: 'preference',
   content: '这位观众喜欢爵士乐。', confidence: 1, createdAt: now,
   expiresAt: null, pinned: false, evidenceEventIds: [event.eventId]
-}, ingest.viewerEpoch!);
+}, ingest.viewerEpoch!, now);
 console.log('删除前记忆数：', repository.listMemories(scope, now).length);
 const deletion = repository.forgetViewer(scope, now + 1);
 console.log('删除后记忆数：', repository.listMemories(scope, now + 1).length);
@@ -33,7 +33,7 @@ assert.throws(() => repository.savePrivateMemory({
   memoryId: 'stale-memory', ...scope, visibility: 'private', kind: 'preference',
   content: '不应被写回。', confidence: 1, createdAt: now + 2,
   expiresAt: null, pinned: false, evidenceEventIds: [event.eventId]
-}, ingest.viewerEpoch!), /stale viewer epoch/);
+}, ingest.viewerEpoch!, now + 2), /stale viewer epoch/);
 assert.equal(deletion.newEpoch, 1);
 console.log('旧代次写入被拒；该演练仅使用模拟观众数据。');
 db.close();
