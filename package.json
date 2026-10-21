@@ -5,6 +5,7 @@
   "engines": { "node": ">=26 <27" },
   "scripts": {
     "test": "node --test tests/*.test.mts",
-    "demo": "node scripts/demo.mts"
+    "demo": "node scripts/demo.mts",
+    "demo:memory": "node scripts/memory-demo.mts"
   }
 }
