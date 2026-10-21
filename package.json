@@ -1,0 +1,10 @@
+{
+  "name": "ai-living",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=26 <27" },
+  "scripts": {
+    "test": "node --test tests/*.test.mts",
+    "demo": "node scripts/demo.mts"
+  }
+}
